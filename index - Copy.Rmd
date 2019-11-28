@@ -1,0 +1,1013 @@
+---
+title: Building a parametric model of daily precipitation, inferenced from empirical
+  pattern
+author: "Andreas Angourakis"
+---
+
+This document contains a progression of steps taken for creating a parametric stochastic model of daily precipitation.
+
+## 1. loading data
+
+We extract data from the original file, downloaded at [NASA´s POWER access viewer](power.larc.nasa.gov/data-access-viewer/). In this case, we are using the data given by the user community 'Agroclimatology' on Hissar (Haryana, India) between 01/01/1982 and 31/12/2014, containing the ICASA Format's parameters:
+
+- Precipitation (PRECTOT)  
+- Wind speed at 2m (WS2M)  
+- Relative Humidity at 2m (RH2M)  
+- Dew/frost point at 2m (T2MDEW)  
+- Maximum temperature at 2m (T2M_MAX)  
+- Minimum temperature at 2m (T2M_MIN)  
+- All sky insolation incident on a horizontal surface (ALLSKY_SFC_SW_DWN)  
+- Temperature at 2m (T2M)  
+
+```{r}
+weather <- read.csv("POWER_SinglePoint_Daily_19820101_20181231_029d15N_075d72E_3a7e0417.csv", skip = 17)
+```
+
+## 2. Assessing the data
+
+
+```{r}
+plotName2 = "plots/PrecipitationModel_Hissar_1982-2014-20_empiricalData.png"
+
+png(plotName2, width = 1000, height = 600)
+
+layout(matrix(c(1,2,3,3), ncol = 2, nrow = 2, byrow = F), widths = c(2,1))
+
+par(mar = c(4,4,1,1))
+
+barplot(weather$PRECTOT, 
+        ylab = "precipitation (mm)", xlab = "day (in series)")
+
+boxplot(data = weather, PRECTOT ~ DOY, ylab = "precipitation (mm)", xlab = "day (in year)")
+
+hist(weather$PRECTOT[weather$DOY == 201], xlab = "precipitation (mm)")
+
+dev.off()
+```
+
+```{r}
+knitr::include_graphics(plotName2)
+```
+
+These plots show the difficulty of creating a parametric model for precipitation:
+
+1. precipitation is a non-uniform, discrete-event measurement. Unlike temperature, one daily value does not approximate the next day value.  
+2. Water is finite in the system, so more rain in one day often decrease the amount and probability of rain in the next day.  
+3. The annual cycle have some regularity, but the probability distribution of precipitation in one calendar day does not have a normal distribution but tend to have two modes (0 and a positive value), with 0 as the mean and outliers as maximum.
+
+### 2.1. Assess the variability of annual precipitation
+
+```{r}
+plotName21 = "plots/PrecipitationModel_Hissar_1982-2014-21_empiricalData-yearSum.png"
+  
+annualSum <- c()
+
+for (year in levels(factor(weather$YEAR)))
+{
+  annualSum <- c(annualSum, sum(weather$PRECTOT[weather$YEAR == year]))
+}
+
+png(plotName21, width = 1000, height = 600)
+
+layout(matrix(c(1,2), ncol = 2))
+
+plot(levels(factor(weather$YEAR)), annualSum, type = 'l', xlab = "years", ylab = "annual precipitation (mm)")
+
+abline(h = mean(annualSum), lty = 2)
+
+text(x = levels(factor(weather$YEAR))[0.5 * nlevels(factor(weather$YEAR))], 
+     y = max(annualSum),
+     labels = paste("mean annual precipitation (mm) = ", round(mean(annualSum), digits = 2) ))
+
+hist(annualSum, xlab = "precipitation (mm)")
+
+dev.off()
+```
+
+```{r}
+knitr::include_graphics(plotName21)
+```
+
+The annual precipitation is a good candidate to be a parameter of our model (one that can be randomised every iteration using uniform or normal distribution).
+
+### 2.2 Getting summary statistics by day of year
+
+```{r}
+summary_DOY <- function(multiYearSeries, doyName = "DOY", varName = "PRECTOT")
+{
+  meanDailyValues <- c()
+  sdDailyValues <- c()
+  minDailyValues <- c()
+  maxDailyValues <- c()
+  
+  for (day in levels(factor(multiYearSeries[, doyName])))
+  {
+    meanDailyValues <- c(meanDailyValues, mean(multiYearSeries[weather$DOY == day, varName], na.rm = T))
+    sdDailyValues <- c(sdDailyValues, sd(multiYearSeries[weather$DOY == day, varName], na.rm = T))
+    minDailyValues <- c(minDailyValues, min(multiYearSeries[weather$DOY == day, varName], na.rm = T))
+    maxDailyValues <- c(maxDailyValues, max(multiYearSeries[weather$DOY == day, varName], na.rm = T))
+  }
+  
+  return(
+    data.frame(mean = meanDailyValues,
+               sd = sdDailyValues, 
+               min = minDailyValues, 
+               max = maxDailyValues)
+  )
+}
+```
+
+```{r}
+summaryByDoy_empiric <- summary_DOY(weather)
+
+summary_empiric <- summary(weather$PRECTOT)
+```
+
+## 3. Attempting a direct approach to modeling daily precipitation using an exponential probability distribution 
+
+```{r}
+n = 33
+maxDOY = 366 # max. days in year. more complex simulation can account better for leap years
+
+dayOfYear <- c()
+year_sim <- c()
+dailyPrecipitation <- c()
+
+for (i in 1:n)
+{
+  for (day in 1:maxDOY)
+  {
+    year_sim <- c(year_sim, i)
+    dayOfYear <- c(dayOfYear, day)
+    dailyPrecipitation <- c(dailyPrecipitation,
+                            # exponential model using the mean
+                            (- summaryByDoy_empiric$mean[day]) * log(runif(1))
+                     )
+  }
+}
+
+expModelOutput <- data.frame(year_sim, dayOfYear, dailyPrecipitation)
+
+summaryByDoy_expModel <- summary_DOY(expModelOutput, doyName = "dayOfYear", varName = "dailyPrecipitation")
+
+summary_expModel <- summary(expModelOutput$dailyPrecipitation)
+```
+
+```{r}
+plotName30 = "plots/PrecipitationModel_Hissar_1982-2014-30_expModel_series.png"
+
+png(plotName30, width = 1200, height = 1000)
+
+layout(matrix(c(1,2), nrow = 2))
+
+par(mar = c(3,4,2,1))
+
+barplot(weather$PRECTOT, 
+        ylab = "precipitation (mm)", main = "empirical",
+        ylim = c(0, max(c(max(summaryByDoy_empiric$max), max(summaryByDoy_expModel$max)))))
+
+text(x = nrow(weather) / 2, y = 0.9 * max(weather$PRECTOT), 
+     labels = paste(
+       "min = ", summary_empiric[1], 
+       ", max = ", round(summary_empiric[6], digits = 3),
+       ", median = ", summary_empiric[3],
+       ", mean = ", round(summary_empiric[4], digits = 3)
+       ))
+
+par(mar = c(4,4,2,1))
+
+barplot(expModelOutput$dailyPrecipitation, 
+        ylab = "precipitation (mm)", main = "simulated",
+        ylim = c(0, max(c(max(summaryByDoy_empiric$max), max(summaryByDoy_expModel$max)))))
+
+text(x = nrow(expModelOutput) / 2, y = 0.9 * max(expModelOutput$dailyPrecipitation), 
+     labels = paste(
+       "min = ", summary_expModel[1], 
+       ", max = ", round(summary_expModel[6], digits = 3),
+       ", median = ", summary_expModel[3],
+       ", mean = ", round(summary_expModel[4], digits = 3)
+     ))
+
+dev.off()
+```
+
+```{r}
+knitr::include_graphics(plotName30)
+```
+
+### 3.1 Compare to input statistics:
+
+```{r}
+plotName31 = "plots/PrecipitationModel_Hissar_1982-2014-31_expModel_summaryDoy.png"
+  
+png(plotName31, width = 1000, height = 1000)
+
+layout(matrix(c(1, 2, 3), nrow = 3), heights = c(10, 10, 1))
+
+par(mar = c(3,4,2,1))
+
+plot(1:nrow(summaryByDoy_empiric), summaryByDoy_empiric$max, col = "red", type = 'l',
+     ylab = "precipitation (mm)", main = "empirical",
+     ylim = c(0, max(c(summaryByDoy_empiric$max, summaryByDoy_expModel$max))))
+
+lines(1:nrow(summaryByDoy_empiric), summaryByDoy_empiric$mean)
+lines(1:nrow(summaryByDoy_empiric), summaryByDoy_empiric$mean + summaryByDoy_empiric$sd, col = "darkorchid4")
+lines(1:nrow(summaryByDoy_empiric), summaryByDoy_empiric$min, col = "blue")
+
+par(mar = c(4,4,2,1))
+
+plot(1:nrow(summaryByDoy_expModel), summaryByDoy_expModel$max, col = "red", type = 'l',
+     xlab = "day in year", 
+     ylab = "precipitation (mm)", main = "simulated",
+     ylim = c(0, max(c(summaryByDoy_empiric$max, summaryByDoy_expModel$max))))
+
+lines(1:nrow(summaryByDoy_expModel), summaryByDoy_expModel$mean)
+lines(1:nrow(summaryByDoy_expModel), summaryByDoy_expModel$mean + summaryByDoy_expModel$sd, col = "darkorchid4")
+lines(1:nrow(summaryByDoy_expModel), summaryByDoy_expModel$min, col = "blue")
+
+par(mar = c(0,0,0,0), cex = 1.2)
+
+plot(c(0, 1), c(0, 1), ann = F, bty = 'n', type = 'n', xaxt = 'n', yaxt = 'n')
+
+legend(x = 0.25, y = 0.8, 
+       legend = c('max', 'mean', 'mean+sd', 'min'),
+       col = c('red', 'black', 'darkorchid4', 'blue'), lty = rep(1, 4),
+       horiz = T)
+
+dev.off()
+```
+
+```{r}
+knitr::include_graphics(plotName31)
+```
+
+**FAIL**: the simulated data approach the mean but does not reflect the variability of the data, never returning the outliers that characterise the empirical pattern. Results underestimate greatly the overall precipitation and overfit the training data.
+
+---
+
+# Modelling assuming normal distribution of daily cumulative proportion of the annual precipitation
+
+*Method summary*:  
+First we find the curve of daily cumulative proportion of the annual precipitation for multplie years in the dataset. Then, we use the mean and standard deviation of the values on each day (for multiple years) to create multiple simulated curves using a random normal distribution for each day in a year. Last, we derivate the simulated daily precipitation from the simulated curve of cumulative proportions. 
+
+## 4. Build the curves of the daily cumulative proportion of annual precipitation for every year in the empirical dataset
+
+```{r}
+proportionSeries <- c()
+cumulativeProportionSeries <- c()
+
+for (year in levels(factor(weather$YEAR)))
+{
+  yearSum = sum(weather$PRECTOT[weather$YEAR == year])
+  cumPropYear = 0
+  for (day in levels(factor(weather$DOY)))
+  {
+    dayProportion = weather$PRECTOT[weather$YEAR == year & weather$DOY == day] / yearSum
+    cumPropYear = cumPropYear + dayProportion
+    
+    proportionSeries <- c(proportionSeries,
+                                   dayProportion) 
+    cumulativeProportionSeries <- c(cumulativeProportionSeries,
+                                      cumPropYear)
+  }
+}
+propToAnnual <- data.frame(proportionSeries, cumulativeProportionSeries)
+```
+
+### 4.1 The daily proportion of annual precipitation
+
+```{r}
+plotName41 = "plots/PrecipitationModel_Hissar_1982-2014-41_buildingCurves-propOfAnnualPrecipitation.png"
+  
+png(plotName41, width = 1000, height = 1000)
+
+layout(matrix(c(1,2), nrow = 2))
+
+par(mar = c(4,4,1,1))
+
+barplot(propToAnnual$proportionSeries,
+        xlab = "day (in series)",
+        ylab = "proportion of annual precipitation (mm/mm)")
+
+boxplot(propToAnnual$proportionSeries ~ weather$DOY, 
+        xlab = "day (in year)",
+        ylab = "proportion of annual precipitation (mm/mm)")
+
+dev.off()
+```
+
+```{r}
+knitr::include_graphics(plotName41)
+```
+
+The pattern should be similar to the one observed in precipitation -- the difference is that the proportions depend on the value of annual precipitation of the corresponding year.
+
+### 4.2 The curves of the daily cumulative proportion of annual precipitation
+
+```{r}
+plotName42 = "plots/PrecipitationModel_Hissar_1982-2014-42_buildingCurves-cumPropOfAnnualPrecipitation.png"
+ 
+png(plotName42, width = 1000, height = 1000)
+
+layout(matrix(c(1,2), nrow = 2))
+
+par(mar = c(4,4,1,1))
+
+plot(1:length(propToAnnual$proportionSeries), propToAnnual$cumulativeProportionSeries, type = 'l',
+     xlab = "day (in series)",
+     ylab = "cumulative proportion of annual precipitation (mm/mm)")
+
+boxplot(propToAnnual$cumulativeProportionSeries ~ weather$DOY,
+        xlab = "day (in year)",
+        ylab = "cumulative proportion of annual precipitation (mm/mm)")
+
+dev.off()
+```
+
+```{r}
+knitr::include_graphics(plotName42)
+```
+
+Although limited to the 0-1 interval, the variability of the curve daily values is much more similar to a normal distribution. 
+
+## 4.3 Get summary statistics for each of the curves' daily values
+
+```{r}
+cumPropDailyMean <- c()
+cumPropDailySD <- c()
+cumPropDailyMin <- c()
+cumPropDailyMax <- c()
+
+for (day in levels(factor(weather$DOY)))
+{
+  cumPropDailyMean <- c(cumPropDailyMean, mean(propToAnnual$cumulativeProportionSeries[weather$DOY == day]))
+  cumPropDailySD <- c(cumPropDailySD, sd(propToAnnual$cumulativeProportionSeries[weather$DOY == day]))
+  cumPropDailyMin <- c(cumPropDailyMin, min(propToAnnual$cumulativeProportionSeries[weather$DOY == day]))
+  cumPropDailyMax <- c(cumPropDailyMax, max(propToAnnual$cumulativeProportionSeries[weather$DOY == day]))
+}
+
+# save them to a file (possible to use them in building the model elsewhere)
+write.csv(
+  data.frame(
+    mean = cumPropDailyMean,
+    sd = cumPropDailySD,
+    min = cumPropDailyMin,
+    max = cumPropDailyMax
+  ),
+  file = "precipitationModel-Hissar-1982-2014-cumulativePropStats.csv"
+)
+```
+
+## 4.4 Simulate n iterations of the curve
+
+```{r}
+n = 33
+maxDOY = 366 # max. days in year. more complex simulation can account better for leap years
+
+dayOfYear <- c()
+year_sim <- c()
+dailyCumPropPrecipitation <- c()
+
+for (i in 1:n)
+{
+  for (day in 1:maxDOY)
+  {
+    year_sim <- c(year_sim, i)
+    dayOfYear <- c(dayOfYear, day)
+    dailyCumPropPrecipitation <- c(dailyCumPropPrecipitation,
+                                   rnorm(1, cumPropDailyMean[day], cumPropDailySD[day])
+                     )
+  }
+}
+
+# limit the values between 0-1 
+# (this tends to create concentrations in 0 and 1 at the beggining and end of the curve; not undesireble)
+dailyCumPropPrecipitation <- sapply(dailyCumPropPrecipitation, function(x) min(1, max(0, x)))
+
+# "correct" negative slopes
+# Because the curves represent cumulative values, 
+# the next value must always be equal or greater than the previous value.
+for (i in 1:length(dailyCumPropPrecipitation))
+{
+  if(dayOfYear[i] > 1)
+  {
+    if (dailyCumPropPrecipitation[i] < dailyCumPropPrecipitation[i - 1])
+    {
+      # option A: adjust both current and last value to the mean
+      #dailyCumPropPrecipitation[i] <- mean(dailyCumPropPrecipitation[i], dailyCumPropPrecipitation[i - 1])
+      #dailyCumPropPrecipitation[i - 1] <- dailyCumPropPrecipitation[i]
+      # option B: adjunst value to the last, if greater
+      dailyCumPropPrecipitation[i] <- max(dailyCumPropPrecipitation[i], dailyCumPropPrecipitation[i - 1])
+      # This tends to bend the curve towards the greater values, meaning earlier precipitation events
+      # (not desirible)
+    }
+  }
+}
+
+normCumModelOutput <- data.frame(year_sim, dayOfYear, dailyCumPropPrecipitation)
+```
+
+### 4.5 Compare empirical and simulated curves:
+
+```{r}
+plotName45 = "plots/PrecipitationModel_Hissar_1982-2014-45_cumProp-model-cumProp.png"
+
+png(plotName45, width = 1200, height = 800)
+
+layout(matrix(c(1, 2, 3, 4, 5, 6), nrow = 3, ncol = 2, byrow = T), heights = c(1, 20, 20))
+
+par(mar = c(0, 0, 0, 0))
+
+plot(c(0, 1), c(0, 1), ann = F, bty = 'n', type = 'n', xaxt = 'n', yaxt = 'n')
+text(x = 0.5, y = 0.5, labels = "EMPIRICAL", cex = 3)
+
+plot(c(0, 1), c(0, 1), ann = F, bty = 'n', type = 'n', xaxt = 'n', yaxt = 'n')
+text(x = 0.5, y = 0.5, labels = "SIMULATED", cex = 3)
+
+par(mar = c(4, 4, 1, 1))
+
+plot(1:length(propToAnnual$cumulativeProportionSeries), propToAnnual$cumulativeProportionSeries, type = 'l', cex = 2,
+     xlab = "day (in series)",
+     ylab = "cumulative proportion of annual precipitation (mm/mm)")
+
+plot(1:nrow(normCumModelOutput), normCumModelOutput$dailyCumPropPrecipitation, type = 'l', cex = 2,
+     xlab = "day (in series)",
+     ylab = "cumulative proportion of annual precipitation (mm/mm)")
+
+boxplot(propToAnnual$cumulativeProportionSeries ~ weather$DOY, cex = 2,
+        xlab = "day (in year)",
+        ylab = "cumulative proportion of annual precipitation (mm/mm)")
+
+boxplot(normCumModelOutput$dailyCumPropPrecipitation ~ normCumModelOutput$dayOfYear, cex = 2,
+        xlab = "day (in year)",
+        ylab = "cumulative proportion of annual precipitation (mm/mm)")
+
+dev.off()
+```
+
+```{r}
+knitr::include_graphics(plotName45)
+```
+
+## 4.6 Derivate daily precipitation values from simulated curves These are the difference between day i and day i - 1
+
+```{r}
+dailyPropPrecipitation <- normCumModelOutput$dailyCumPropPrecipitation
+
+for (i in 1:length(dailyPropPrecipitation))
+{
+  if(normCumModelOutput$dayOfYear[i] > 1) # dailyPropPrecipitation = dailyCumPropPrecipitation, if day = 1
+  {
+    dailyPropPrecipitation[i] <- normCumModelOutput$dailyCumPropPrecipitation[i] - normCumModelOutput$dailyCumPropPrecipitation[i - 1]
+  }
+}
+
+normCumModelOutput$dailyPropPrecipitation <- dailyPropPrecipitation
+
+summaryByDoy_normCumModel <- summary_DOY(normCumModelOutput, doyName = "dayOfYear", varName = "dailyPropPrecipitation")
+
+summary_normCumModel <- summary(normCumModelOutput$dailyPropPrecipitation)
+```
+
+## 4.7 Compare with empirical data, assuming annual precipitation = 500
+
+```{r}
+annualSum_modelPar = mean(annualSum) # (mm)
+
+summaryPrecip_empiric <- summary(weather$PRECTOT)
+summaryPrecip_model <- summary(normCumModelOutput$dailyPropPrecipitation * annualSum_modelPar)
+
+plotName47 = "plots/PrecipitationModel_Hissar_1982-2014-47_cumProp-model-dailyPrecip_series.png"
+
+png(plotName47, width = 1200, height = 1000)
+
+layout(matrix(c(1,2), nrow = 2))
+
+par(mar = c(3,4,2,1))
+
+barplot(weather$PRECTOT, 
+        ylab = "precipitation (mm)", main = "empirical",
+        ylim = c(0, max(c(summaryByDoy_empiric$max, summaryByDoy_normCumModel$max * annualSum_modelPar))))
+
+text(x = nrow(weather) / 2, y = 0.9 * max(weather$PRECTOT), 
+     labels = paste(
+       "min = ", summaryPrecip_empiric[1], 
+       ", max = ", round(summaryPrecip_empiric[6], digits = 3),
+       ", median = ", summaryPrecip_empiric[3],
+       ", mean = ", round(summaryPrecip_empiric[4], digits = 3)
+       ))
+
+par(mar = c(4,4,2,1))
+
+barplot(normCumModelOutput$dailyPropPrecipitation * annualSum_modelPar, 
+        ylab = "precipitation (mm)", main = "simulated",
+        ylim = c(0, max(c(summaryByDoy_empiric$max, summaryByDoy_normCumModel$max * annualSum_modelPar))))
+
+text(x = nrow(normCumModelOutput) / 2, y = 0.9 * max(normCumModelOutput$dailyPropPrecipitation * annualSum_modelPar), 
+     labels = paste(
+       "min = ", summary_normCumModel[1] * annualSum_modelPar, 
+       ", max = ", round(summary_normCumModel[6] * annualSum_modelPar, digits = 3),
+       ", median = ", summary_normCumModel[3] * annualSum_modelPar,
+       ", mean = ", round(summary_normCumModel[4] * annualSum_modelPar, digits = 3)
+     ))
+
+dev.off()
+```
+
+```{r}
+knitr::include_graphics(plotName47)
+```
+
+### 4.8 Compare to input statistics:
+
+```{r}
+plotName48 = "plots/PrecipitationModel_Hissar_1982-2014-48_normCumModel_summaryDoy.png"
+  
+png(plotName48, width = 1000, height = 1000)
+
+layout(matrix(c(1, 2, 3), nrow = 3), heights = c(10, 10, 1))
+
+par(mar = c(3,4,2,1))
+
+plot(1:nrow(summaryByDoy_empiric), summaryByDoy_empiric$max, col = "red", type = 'l',
+     ylab = "precipitation (mm)", main = "empirical",
+     ylim = c(0, max(c(summaryByDoy_empiric$max, summaryByDoy_normCumModel$max * annualSum_modelPar))))
+
+lines(1:nrow(summaryByDoy_empiric), summaryByDoy_empiric$mean)
+lines(1:nrow(summaryByDoy_empiric), 
+      summaryByDoy_empiric$mean + summaryByDoy_empiric$sd, 
+      col = "darkorchid4")
+lines(1:nrow(summaryByDoy_empiric), summaryByDoy_empiric$min, col = "blue")
+
+par(mar = c(4,4,2,1))
+
+plot(1:nrow(summaryByDoy_normCumModel), summaryByDoy_normCumModel$max * annualSum_modelPar, 
+     col = "red", type = 'l',
+     xlab = "day in year", 
+     ylab = "precipitation (mm)", main = "simulated",
+     ylim = c(0, max(c(summaryByDoy_empiric$max, summaryByDoy_normCumModel$max * annualSum_modelPar))))
+
+lines(1:nrow(summaryByDoy_normCumModel), summaryByDoy_normCumModel$mean * annualSum_modelPar)
+lines(1:nrow(summaryByDoy_normCumModel), 
+      (summaryByDoy_normCumModel$mean + summaryByDoy_normCumModel$sd) * annualSum_modelPar, 
+      col = "darkorchid4")
+lines(1:nrow(summaryByDoy_normCumModel), summaryByDoy_normCumModel$min * annualSum_modelPar, col = "blue")
+
+par(mar = c(0,0,0,0), cex = 1.2)
+
+plot(c(0, 1), c(0, 1), ann = F, bty = 'n', type = 'n', xaxt = 'n', yaxt = 'n')
+
+legend(x = 0.25, y = 0.8, 
+       legend = c('max', 'mean', 'mean+sd', 'min'),
+       col = c('red', 'black', 'darkorchid4', 'blue'), lty = rep(1, 4),
+       horiz = T)
+
+dev.off()
+```
+
+```{r}
+knitr::include_graphics(plotName48)
+```
+
+### 4.9 Check the variability of annual precipitation
+
+```{r}
+annualSum_model <- c()
+
+for (year in levels(factor(normCumModelOutput$year_sim)))
+{
+  annualSum_model <- c(annualSum_model, sum(normCumModelOutput$dailyPropPrecipitation[normCumModelOutput$year_sim == year] * annualSum_modelPar))
+}
+```
+
+Only to confirm that the daily proportion of annual precipitation always sum up to 1 meaning that the annual precipitation is really controlled as a parameter (i.e. annualSum_modelPar)
+
+```{r}
+plotName49 = "plots/PrecipitationModel_Hissar_1982-2014-49_cumProp-model-yearSum.png"
+
+png(plotName49, width = 1000, height = 1200)
+
+layout(matrix(c(1,2,3,4), nrow = 2))
+
+plot(1:length(annualSum), annualSum, type = 'l', xlab = "years", ylab = "precipitation (mm)")
+
+hist(annualSum, xlab = "precipitation (mm)")
+
+plot(1:length(annualSum_model), annualSum_model, type = 'l', xlab = "years", ylab = "precipitation (mm)")
+
+hist(annualSum_model, xlab = "precipitation (mm)")
+
+dev.off()
+```
+
+```{r}
+knitr::include_graphics(plotName49)
+```
+
+**FAIL**: the simulated data reflect well the variability of the data and controls the total amount of precipitation in a year. However, simulated precipitation falls to early and, thus, too concentrated, raising the daily maximum much beyond the empirical maximum while creating longer periods of drought.
+
+---
+
+# Modelling assuming double logistic curve for daily cumulative proportion of the annual precipitation
+
+*Method summary*:  
+The simulated daily precipitation is obtained by using a double logistic curve as the propability function of  (Shabani et al. 2018, http://doi.org/10.1017/S0021859617000934). 
+
+## 5.1 Define double logistic function
+
+```{r}
+doubleLogistic <- function(dayOfYear, 
+                           plateauValue, inflection1, rate1, inflection2, rate2
+                           #m1, m2, m3, m4, m5, m6, m7
+                           #plateauValue, a, b, c, d
+                           )
+{
+  return(
+    (plateauValue / (1 + exp((inflection1 - dayOfYear) * rate1))) + ((1 - plateauValue) / (1 + exp((inflection2 - dayOfYear) * rate2)))
+    # Elmore et al. 2012
+    # m1 + (m2 - m7 * dayOfYear) * (
+    #   (1 / (1 + exp((m3 - dayOfYear) / m4))) + (1 / (1 + exp((m5 - dayOfYear) / m6)))
+    # )
+    # Shabani et al. 2018:
+    #(plateauValue / (1 + exp(-a * dayOfYear + b))) + ((1 - plateauValue) / (1 + exp(-c * dayOfYear + d)))
+  )
+}
+
+doubleLogisticCurve <- function(start.x, end.x, plateauValue, inflection1, rate1, inflection2, rate2)
+{
+  curve <- c()
+  for (i in start.x:end.x)
+  {
+    curve <- c(curve, doubleLogistic(i, plateauValue, inflection1, rate1, inflection2, rate2))
+  }
+  return(curve)
+}
+```
+
+Brief parameter exploration:
+
+```{r}
+plotName51 = "plots/PrecipitationModel_Hissar_1982-2014-51_doubleLogCumProp-model-cumProp.png"
+
+colours <- rainbow(10)
+plateauValues <- round(seq(from = 0.01, to = 0.8, length.out = 10), digits = 2)
+inflection1Values <- round(seq(from = 20, to = 100, length.out = 10), digits = 2)
+rate1Values <- round(seq(from = 0.1, to = 0.5, length.out = 10), digits = 2)
+inflection2Values <- round(seq(from = 150, to = 300, length.out = 10), digits = 2)
+rate2Values <- round(seq(from = 0.04, to = 0.08, length.out = 10), digits = 2)
+
+png(plotName51, width = 2000, height = 600)
+
+layout(matrix(1:10, nrow = 2, byrow = T), heights = c(8, 1))
+
+# plateau value
+plot(1:366, 
+     doubleLogisticCurve(
+       start.x = 1, end.x = 366, 
+       plateauValue = 0.1, inflection1 = 40, rate1 = 0.2, inflection2 = 200, rate2 = 0.06),
+     ylab = "output", main = "parameter: plateau value")
+
+for (i in 1:10)
+{
+  lines(1:366,
+        doubleLogisticCurve(
+          start.x = 1, end.x = 366, 
+          plateauValue = plateauValues[i], inflection1 = 40, rate1 = 0.2, inflection2 = 200, rate2 = 0.06),
+        col = colours[i])
+}
+
+# inflection 1
+plot(1:366, 
+     doubleLogisticCurve(
+       start.x = 1, end.x = 366, 
+       plateauValue = 0.1, inflection1 = 40, rate1 = 0.2, inflection2 = 200, rate2 = 0.06),
+     ylab = "output", main = "parameter: inflection1")
+
+for (i in 1:10)
+{
+  lines(1:366,
+        doubleLogisticCurve(
+          start.x = 1, end.x = 366, 
+          plateauValue = 0.1, inflection1 = inflection1Values[i], rate1 = 0.2, inflection2 = 200, rate2 = 0.06),
+        col = colours[i])
+}
+
+# rate 1
+plot(1:366, 
+     doubleLogisticCurve(
+       start.x = 1, end.x = 366, 
+       plateauValue = 0.1, inflection1 = 40, rate1 = 0.2, inflection2 = 200, rate2 = 0.06),
+     ylab = "output", main = "parameter: rate1")
+
+for (i in 1:10)
+{
+  lines(1:366,
+        doubleLogisticCurve(
+          start.x = 1, end.x = 366, 
+          plateauValue = 0.1, inflection1 = 40, rate1 = rate1Values[i], inflection2 = 200, rate2 = 0.06),
+        col = colours[i])
+}
+
+# inflection 2
+plot(1:366, 
+     doubleLogisticCurve(
+       start.x = 1, end.x = 366, 
+       plateauValue = 0.1, inflection1 = 40, rate1 = 0.2, inflection2 = 200, rate2 = 0.06),
+     ylab = "output", main = "parameter: inflection2")
+
+for (i in 1:10)
+{
+  lines(1:366,
+        doubleLogisticCurve(
+          start.x = 1, end.x = 366, 
+          plateauValue = 0.1, inflection1 = 40, rate1 = 0.2, inflection2 = inflection2Values[i], rate2 = 0.06),
+        col = colours[i])
+}
+
+# rate 2
+plot(1:366, 
+     doubleLogisticCurve(
+       start.x = 1, end.x = 366, 
+       plateauValue = 0.1, inflection1 = 40, rate1 = 0.2, inflection2 = 200, rate2 = 0.06),
+     ylab = "output", main = "parameter: rate2")
+
+for (i in 1:10)
+{
+  lines(1:366,
+        doubleLogisticCurve(
+          start.x = 1, end.x = 366, 
+          plateauValue = 0.1, inflection1 = 40, rate1 = 0.2, inflection2 = 200, rate2 = rate2Values[i]),
+        col = colours[i])
+}
+
+# legends
+
+par(mar = c(0,0,0,0), cex = 0.55)
+
+plot(c(0, 1), c(0, 1), ann = F, bty = 'n', type = 'n', xaxt = 'n', yaxt = 'n')
+
+legend(x = 0.01, y = 0.8, 
+       legend = as.character(plateauValues),
+       col = colours, lty = rep(1, 4),
+       horiz = T)
+
+plot(c(0, 1), c(0, 1), ann = F, bty = 'n', type = 'n', xaxt = 'n', yaxt = 'n')
+
+legend(x = 0.01, y = 0.8, 
+       legend = as.character(inflection1Values),
+       col = colours, lty = rep(1, 4),
+       horiz = T)
+
+plot(c(0, 1), c(0, 1), ann = F, bty = 'n', type = 'n', xaxt = 'n', yaxt = 'n')
+
+legend(x = 0.01, y = 0.8, 
+       legend = as.character(rate1Values),
+       col = colours, lty = rep(1, 4),
+       horiz = T)
+
+plot(c(0, 1), c(0, 1), ann = F, bty = 'n', type = 'n', xaxt = 'n', yaxt = 'n')
+
+legend(x = 0.01, y = 0.8, 
+       legend = as.character(inflection2Values),
+       col = colours, lty = rep(1, 4),
+       horiz = T)
+
+plot(c(0, 1), c(0, 1), ann = F, bty = 'n', type = 'n', xaxt = 'n', yaxt = 'n')
+
+legend(x = 0.01, y = 0.8, 
+       legend = as.character(rate2Values),
+       col = colours, lty = rep(1, 4),
+       horiz = T)
+
+dev.off()
+```
+
+```{r}
+knitr::include_graphics(plotName51)
+```
+
+## 5.2 Simulate n iterations of the curve
+
+```{r}
+n = 33
+maxDOY = 366 # max. days in year. more complex simulation can account better for leap years
+
+dayOfYear <- c()
+year_sim <- c()
+dailyCumPropPrecipitation <- c()
+
+for (i in 1:n)
+{
+  plateauValue = min(1, max(0, rnorm(1, 0.1, 0.05)))
+  inflection1 = min(maxDOY, max(1, rnorm(1, 40, 20)))
+  rate1 = max(0, rnorm(1, 0.15, 0.02))
+  inflection2 = min(maxDOY, max(1, rnorm(1, 200, 20)))
+  rate2 = max(0, rnorm(1, 0.05, 0.01))
+  
+  for (day in 1:maxDOY)
+  {
+    year_sim <- c(year_sim, i)
+    dayOfYear <- c(dayOfYear, day)
+    dailyCumPropPrecipitation <- c(dailyCumPropPrecipitation,
+                                   doubleLogistic(
+                                     dayOfYear = day,
+                                     plateauValue = plateauValue,
+                                     inflection1 = inflection1,
+                                     rate1 = rate1,
+                                     inflection2 = inflection2,
+                                     rate2 = rate2
+                                     )
+                     )
+  }
+}
+
+# algorithm to break continuous pattern
+nSamplesPerYear = 200
+maxSampleSize = 10
+for (year in levels(factor(year_sim)))
+{
+  for (i in 1:nSamplesPerYear)
+  {
+    # get a decreasing sample size proportionally to sample i
+    thisSampleSize = ceiling(maxSampleSize * i / nSamplesPerYear)
+    # get random day of year
+    rainDOY = round(runif(1, min = 1, max = maxDOY))
+    # set sample limits
+    earliestNeighbour = max(1, rainDOY - thisSampleSize)
+    latestNeighbour = min(366, rainDOY + thisSampleSize)
+    # get mean of neighbourhood
+    meanNeighbourhood = mean(dailyCumPropPrecipitation[year_sim == year &
+                                                         dayOfYear >= earliestNeighbour &
+                                                         dayOfYear <= latestNeighbour])
+    # assign mean to all days in neighbourhood
+    for (j in earliestNeighbour:latestNeighbour)
+    {
+      dailyCumPropPrecipitation[year_sim == year & dayOfYear == j] <- meanNeighbourhood
+    }
+  }
+}
+
+doubleLogCumModelOutput <- data.frame(year_sim, dayOfYear, dailyCumPropPrecipitation)
+```
+
+### 5.3 Compare empirical and simulated curves
+
+```{r}
+plotName53 = "plots/PrecipitationModel_Hissar_1982-2014-53_doubleLogCumProp-model-cumProp.png"
+
+png(plotName53, width = 1200, height = 800)
+
+layout(matrix(c(1, 2, 3, 4, 5, 6), nrow = 3, ncol = 2, byrow = T), heights = c(1, 20, 20))
+
+par(mar = c(0, 0, 0, 0))
+
+plot(c(0, 1), c(0, 1), ann = F, bty = 'n', type = 'n', xaxt = 'n', yaxt = 'n')
+text(x = 0.5, y = 0.5, labels = "EMPIRICAL", cex = 3)
+
+plot(c(0, 1), c(0, 1), ann = F, bty = 'n', type = 'n', xaxt = 'n', yaxt = 'n')
+text(x = 0.5, y = 0.5, labels = "SIMULATED", cex = 3)
+
+par(mar = c(4, 4, 1, 1))
+
+plot(1:length(propToAnnual$cumulativeProportionSeries), propToAnnual$cumulativeProportionSeries, type = 'l', cex = 2,
+     xlab = "day (in series)",
+     ylab = "cumulative proportion of annual precipitation (mm/mm)")
+
+plot(1:nrow(doubleLogCumModelOutput), normCumModelOutput$dailyCumPropPrecipitation, type = 'l', cex = 2,
+     xlab = "day (in series)",
+     ylab = "cumulative proportion of annual precipitation (mm/mm)")
+
+boxplot(propToAnnual$cumulativeProportionSeries ~ weather$DOY, cex = 2,
+        xlab = "day (in year)",
+        ylab = "cumulative proportion of annual precipitation (mm/mm)")
+
+boxplot(doubleLogCumModelOutput$dailyCumPropPrecipitation ~ doubleLogCumModelOutput$dayOfYear, cex = 2,
+        xlab = "day (in year)",
+        ylab = "cumulative proportion of annual precipitation (mm/mm)")
+
+dev.off()
+```
+
+```{r}
+knitr::include_graphics(plotName53)
+```
+
+## 5.4 Derivate daily precipitation values from simulated curves These are the difference between day i and day i - 1
+
+```{r}
+dailyPropPrecipitation <- doubleLogCumModelOutput$dailyCumPropPrecipitation
+
+for (i in 1:length(dailyPropPrecipitation))
+{
+  if(doubleLogCumModelOutput$dayOfYear[i] > 1) # dailyPropPrecipitation = dailyCumPropPrecipitation, if day = 1
+  {
+    dailyPropPrecipitation[i] <- doubleLogCumModelOutput$dailyCumPropPrecipitation[i] - doubleLogCumModelOutput$dailyCumPropPrecipitation[i - 1]
+  }
+}
+
+doubleLogCumModelOutput$dailyPropPrecipitation <- dailyPropPrecipitation
+
+summaryByDoy_doubleLogCumModel <- summary_DOY(doubleLogCumModelOutput, doyName = "dayOfYear", varName = "dailyPropPrecipitation")
+
+summary_doubleLogCumModel <- summary(doubleLogCumModelOutput$dailyPropPrecipitation)
+```
+
+## 5.5 Compare with empirical data, assuming annual precipitation = 500
+
+```{r}
+annualSum_modelPar = mean(annualSum) # (mm)
+
+summaryPrecip_empiric <- summary(weather$PRECTOT)
+summaryPrecip_model <- summary(doubleLogCumModelOutput$dailyPropPrecipitation * annualSum_modelPar)
+
+plotName55 = "plots/PrecipitationModel_Hissar_1982-2014-55_doubleLogCumProp-model-dailyPrecip_series.png"
+
+png(plotName55, width = 1200, height = 1000)
+
+layout(matrix(c(1,2), nrow = 2))
+
+par(mar = c(3,4,2,1))
+
+barplot(weather$PRECTOT, 
+        ylab = "precipitation (mm)", main = "empirical",
+        ylim = c(0, max(c(summaryByDoy_empiric$max, summaryByDoy_doubleLogCumModel$max * annualSum_modelPar))))
+
+text(x = nrow(weather) / 2, y = 0.9 * max(weather$PRECTOT), 
+     labels = paste(
+       "min = ", summaryPrecip_empiric[1], 
+       ", max = ", round(summaryPrecip_empiric[6], digits = 3),
+       ", median = ", summaryPrecip_empiric[3],
+       ", mean = ", round(summaryPrecip_empiric[4], digits = 3)
+       ))
+
+par(mar = c(4,4,2,1))
+
+barplot(doubleLogCumModelOutput$dailyPropPrecipitation * annualSum_modelPar, 
+        ylab = "precipitation (mm)", main = "simulated",
+        ylim = c(0, max(c(summaryByDoy_empiric$max, summaryByDoy_doubleLogCumModel$max * annualSum_modelPar))))
+
+text(x = nrow(doubleLogCumModelOutput) / 2, y = 0.9 * max(doubleLogCumModelOutput$dailyPropPrecipitation * annualSum_modelPar), 
+     labels = paste(
+       "min = ", round(summary_doubleLogCumModel[1] * annualSum_modelPar, digits = 3), 
+       ", max = ", round(summary_doubleLogCumModel[6] * annualSum_modelPar, digits = 3),
+       ", median = ", round(summary_doubleLogCumModel[3] * annualSum_modelPar, digits = 3),
+       ", mean = ", round(summary_doubleLogCumModel[4] * annualSum_modelPar, digits = 3)
+     ))
+
+dev.off()
+```
+
+```{r}
+knitr::include_graphics(plotName55)
+```
+
+### 5.6 Compare to input statistics:
+
+```{r}
+plotName56 = "plots/PrecipitationModel_Hissar_1982-2014-56_doubleLogCumProp_summaryDoy.png"
+  
+png(plotName56, width = 1000, height = 1000)
+
+layout(matrix(c(1, 2, 3), nrow = 3), heights = c(10, 10, 1))
+
+par(mar = c(3,4,2,1))
+
+plot(1:nrow(summaryByDoy_empiric), summaryByDoy_empiric$max, col = "red", type = 'l',
+     ylab = "precipitation (mm)", main = "empirical",
+     ylim = c(0, max(c(summaryByDoy_empiric$max, summaryByDoy_doubleLogCumModel$max * annualSum_modelPar))))
+
+lines(1:nrow(summaryByDoy_empiric), summaryByDoy_empiric$mean)
+lines(1:nrow(summaryByDoy_empiric), 
+      summaryByDoy_empiric$mean + summaryByDoy_empiric$sd, 
+      col = "darkorchid4")
+lines(1:nrow(summaryByDoy_empiric), summaryByDoy_empiric$min, col = "blue")
+
+par(mar = c(4,4,2,1))
+
+plot(1:nrow(summaryByDoy_doubleLogCumModel), summaryByDoy_doubleLogCumModel$max * annualSum_modelPar, 
+     col = "red", type = 'l',
+     xlab = "day in year", 
+     ylab = "precipitation (mm)", main = "simulated",
+     ylim = c(0, max(c(summaryByDoy_empiric$max, summaryByDoy_doubleLogCumModel$max * annualSum_modelPar))))
+
+lines(1:nrow(summaryByDoy_doubleLogCumModel), summaryByDoy_doubleLogCumModel$mean * annualSum_modelPar)
+lines(1:nrow(summaryByDoy_doubleLogCumModel), 
+      (summaryByDoy_doubleLogCumModel$mean + summaryByDoy_doubleLogCumModel$sd) * annualSum_modelPar, 
+      col = "darkorchid4")
+lines(1:nrow(summaryByDoy_doubleLogCumModel), summaryByDoy_doubleLogCumModel$min * annualSum_modelPar, col = "blue")
+
+par(mar = c(0,0,0,0), cex = 1.2)
+
+plot(c(0, 1), c(0, 1), ann = F, bty = 'n', type = 'n', xaxt = 'n', yaxt = 'n')
+
+legend(x = 0.25, y = 0.8, 
+       legend = c('max', 'mean', 'mean+sd', 'min'),
+       col = c('red', 'black', 'darkorchid4', 'blue'), lty = rep(1, 4),
+       horiz = T)
+
+dev.off()
+```
+
+```{r}
+knitr::include_graphics(plotName56)
+```
