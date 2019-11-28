@@ -2,11 +2,15 @@
 title: Building a parametric model of daily precipitation, inferenced from empirical
   pattern
 author: "Andreas Angourakis"
+date: "28 November 2019"
+output: 
+  html_document:
+    number_sections: true
 ---
 
 This document contains a progression of steps taken for creating a parametric stochastic model of daily precipitation.
 
-## 1. loading data
+## Loading data
 
 We extract data from the original file, downloaded at [NASA´s POWER access viewer](power.larc.nasa.gov/data-access-viewer/). In this case, we are using the data given by the user community 'Agroclimatology' on Hissar (Haryana, India) between 01/01/1982 and 31/12/2014, containing the ICASA Format's parameters:
 
@@ -23,7 +27,7 @@ We extract data from the original file, downloaded at [NASA´s POWER access view
 weather <- read.csv("POWER_SinglePoint_Daily_19820101_20181231_029d15N_075d72E_3a7e0417.csv", skip = 17)
 ```
 
-## 2. Assessing the data
+## Assessing the data
 
 
 ```{r}
@@ -45,7 +49,7 @@ These plots show the difficulty of creating a parametric model for precipitation
 2. Water is finite in the system, so more rain in one day often decrease the amount and probability of rain in the next day.  
 3. The annual cycle have some regularity, but the probability distribution of precipitation in one calendar day does not have a normal distribution but tend to have two modes (0 and a positive value), with 0 as the mean and outliers as maximum.
 
-### 2.1. Assess the variability of annual precipitation
+### Assess the variability of annual precipitation
 
 ```{r}
 annualSum <- c()
@@ -71,7 +75,7 @@ hist(annualSum, xlab = "precipitation (mm)")
 
 The annual precipitation is a good candidate to be a parameter of our model (one that can be randomised every iteration using uniform or normal distribution).
 
-### 2.2 Getting summary statistics by day of year
+### Getting summary statistics by day of year
 
 ```{r}
 summary_DOY <- function(multiYearSeries, doyName = "DOY", varName = "PRECTOT")
@@ -105,7 +109,7 @@ summary_empiric <- summary(weather$PRECTOT)
 summary_empiric$sd <- sd(weather$PRECTOT)
 ```
 
-## 3. Attempting a direct approach to modeling daily precipitation using an exponential probability distribution 
+## Attempting a direct approach to modeling daily precipitation using an exponential probability distribution 
 
 ```{r}
 n = 33
@@ -170,7 +174,7 @@ text(x = nrow(expModelOutput) / 2, y = 0.9 * max(c(max(summaryByDoy_empiric$max)
      cex = 0.8)
 ```
 
-### 3.1 Compare to input statistics:
+### Compare to input statistics:
 
 ```{r}
 layout(matrix(c(1, 2, 3), nrow = 3), heights = c(10, 10, 2))
@@ -215,7 +219,7 @@ legend(x = 0.25, y = 0.8,
 *Method summary*:  
 First we find the curve of daily cumulative proportion of the annual precipitation for multplie years in the dataset. Then, we use the mean and standard deviation of the values on each day (for multiple years) to create multiple simulated curves using a random normal distribution for each day in a year. Last, we derivate the simulated daily precipitation from the simulated curve of cumulative proportions. 
 
-## 4. Build the curves of the daily cumulative proportion of annual precipitation for every year in the empirical dataset
+## Build the curves of the daily cumulative proportion of annual precipitation for every year in the empirical dataset
 
 ```{r}
 proportionSeries <- c()
@@ -239,7 +243,7 @@ for (year in levels(factor(weather$YEAR)))
 propToAnnual <- data.frame(proportionSeries, cumulativeProportionSeries)
 ```
 
-### 4.1 The daily proportion of annual precipitation
+### The daily proportion of annual precipitation
 
 ```{r}
 par(mar = c(4, 4, 1, 1))
@@ -257,7 +261,7 @@ boxplot(propToAnnual$proportionSeries ~ weather$DOY,
 
 The pattern should be similar to the one observed in precipitation -- the difference is that the proportions depend on the value of annual precipitation of the corresponding year.
 
-### 4.2 The curves of the daily cumulative proportion of annual precipitation
+### The curves of the daily cumulative proportion of annual precipitation
 
 ```{r}
 plot(1:length(propToAnnual$proportionSeries), propToAnnual$cumulativeProportionSeries, type = 'l',
@@ -273,7 +277,7 @@ boxplot(propToAnnual$cumulativeProportionSeries ~ weather$DOY,
 
 Although limited to the 0-1 interval, the variability of the curve daily values is much more similar to a normal distribution. 
 
-## 4.3 Get summary statistics for each of the curves' daily values
+## Get summary statistics for each of the curves' daily values
 
 ```{r}
 cumPropDailyMean <- c()
@@ -290,9 +294,11 @@ for (day in levels(factor(weather$DOY)))
 }
 ```
 
-## 4.4 Simulate n iterations of the curve
+## Simulate n iterations of the curve
 
 ```{r}
+set.seed(0)
+
 n = 33
 maxDOY = 366 # max. days in year. more complex simulation can account better for leap years
 
@@ -339,7 +345,7 @@ for (i in 1:length(dailyCumPropPrecipitation))
 normCumModelOutput <- data.frame(year_sim, dayOfYear, dailyCumPropPrecipitation)
 ```
 
-### 4.5 Compare empirical and simulated curves:
+### Compare empirical and simulated curves:
 
 ```{r}
 boxplot(propToAnnual$cumulativeProportionSeries ~ weather$DOY, cex = 2,
@@ -353,7 +359,7 @@ boxplot(normCumModelOutput$dailyCumPropPrecipitation ~ normCumModelOutput$dayOfY
         border = "blue")
 ```
 
-## 4.6 Derivate daily precipitation values from simulated curves These are the difference between day i and day i - 1
+## Derivate daily precipitation values from simulated curves These are the difference between day i and day i - 1
 
 ```{r}
 dailyPropPrecipitation <- normCumModelOutput$dailyCumPropPrecipitation
@@ -374,7 +380,7 @@ summary_normCumModel <- summary(normCumModelOutput$dailyPropPrecipitation)
 summary_normCumModel$sd <- sd(normCumModelOutput$dailyPropPrecipitation)
 ```
 
-## 4.7 Compare with empirical data, assuming annual precipitation = 500
+## Compare with empirical data, assuming annual precipitation = 500
 
 ```{r}
 annualSum_modelPar = mean(annualSum) # (mm)
@@ -414,7 +420,7 @@ text(x = nrow(normCumModelOutput) / 2, y = 0.9 * max(c(summaryByDoy_empiric$max,
      ))
 ```
 
-### 4.8 Compare to input statistics:
+### Compare to input statistics:
 
 ```{r}
 layout(matrix(c(1, 2, 3), nrow = 3), heights = c(10, 10, 2))
@@ -455,7 +461,7 @@ legend(x = 0.25, y = 0.8,
        horiz = T)
 ```
 
-### 4.9 Check the variability of annual precipitation
+### Check the variability of annual precipitation
 
 ```{r}
 annualSum_model <- c()
@@ -489,7 +495,7 @@ hist(annualSum_model, xlab = "precipitation (mm)")
 *Method summary*:  
 The simulated daily precipitation is obtained by using a double logistic curve as the propability function of  (Shabani et al. 2018, http://doi.org/10.1017/S0021859617000934). 
 
-## 5.1 Define double logistic function
+## Define double logistic function
 
 ```{r}
 doubleLogistic <- function(dayOfYear, 
@@ -551,7 +557,7 @@ for (i in 1:10)
         col = colours[i])
 }
 
-par(mar = c(0,0,0,0), cex = 0.55)
+par(mar = c(0,0,0,0), cex = 0.6)
 
 plot(c(0, 1), c(0, 1), ann = F, bty = 'n', type = 'n', xaxt = 'n', yaxt = 'n')
 
@@ -581,7 +587,7 @@ for (i in 1:10)
         col = colours[i])
 }
 
-par(mar = c(0,0,0,0), cex = 0.55)
+par(mar = c(0,0,0,0), cex = 0.6)
 
 plot(c(0, 1), c(0, 1), ann = F, bty = 'n', type = 'n', xaxt = 'n', yaxt = 'n')
 
@@ -610,7 +616,7 @@ for (i in 1:10)
         col = colours[i])
 }
 
-par(mar = c(0,0,0,0), cex = 0.55)
+par(mar = c(0,0,0,0), cex = 0.6)
 
 plot(c(0, 1), c(0, 1), ann = F, bty = 'n', type = 'n', xaxt = 'n', yaxt = 'n')
 
@@ -640,7 +646,7 @@ for (i in 1:10)
         col = colours[i])
 }
 
-par(mar = c(0,0,0,0), cex = 0.55)
+par(mar = c(0,0,0,0), cex = 0.6)
 
 plot(c(0, 1), c(0, 1), ann = F, bty = 'n', type = 'n', xaxt = 'n', yaxt = 'n')
 
@@ -669,7 +675,7 @@ for (i in 1:10)
         col = colours[i])
 }
 
-par(mar = c(0,0,0,0), cex = 0.55)
+par(mar = c(0,0,0,0), cex = 0.6)
 
 plot(c(0, 1), c(0, 1), ann = F, bty = 'n', type = 'n', xaxt = 'n', yaxt = 'n')
 
@@ -679,9 +685,11 @@ legend(x = 0.01, y = 0.8,
        horiz = T)
 ```
 
-## 5.2 Simulate n iterations of the curve
+## Simulate n iterations of the curve
 
 ```{r}
+set.seed(0)
+
 n = 33
 maxDOY = 366 # max. days in year. more complex simulation can account better for leap years
 
@@ -691,10 +699,10 @@ dailyCumPropPrecipitation <- c()
 
 for (i in 1:n)
 {
-  plateauValue = min(1, max(0, rnorm(1, 0.1, 0.05)))
+  plateauValue = min(1, max(0, rnorm(1, 0.09, 0.05)))
   inflection1 = min(maxDOY, max(1, rnorm(1, 40, 20)))
-  rate1 = max(0, rnorm(1, 0.15, 0.02))
-  inflection2 = min(maxDOY, max(1, rnorm(1, 200, 20)))
+  rate1 = max(0, rnorm(1, 0.08, 0.02))
+  inflection2 = min(maxDOY, max(1, rnorm(1, 210, 20)))
   rate2 = max(0, rnorm(1, 0.05, 0.01))
   
   for (day in 1:maxDOY)
@@ -743,7 +751,7 @@ for (year in levels(factor(year_sim)))
 doubleLogCumModelOutput <- data.frame(year_sim, dayOfYear, dailyCumPropPrecipitation)
 ```
 
-### 5.3 Compare empirical and simulated curves
+### Compare empirical and simulated curves
 
 ```{r}
 boxplot(propToAnnual$cumulativeProportionSeries ~ weather$DOY, cex = 2,
@@ -758,7 +766,7 @@ boxplot(doubleLogCumModelOutput$dailyCumPropPrecipitation ~ doubleLogCumModelOut
         border = "blue")
 ```
 
-## 5.4 Derivate daily precipitation values from simulated curves These are the difference between day i and day i - 1
+## Derivate daily precipitation values from simulated curves These are the difference between day i and day i - 1
 
 ```{r}
 dailyPropPrecipitation <- doubleLogCumModelOutput$dailyCumPropPrecipitation
@@ -779,7 +787,7 @@ summary_doubleLogCumModel <- summary(doubleLogCumModelOutput$dailyPropPrecipitat
 summary_doubleLogCumModel$sd <- sd(doubleLogCumModelOutput$dailyPropPrecipitation)
 ```
 
-## 5.5 Compare with empirical data, assuming annual precipitation = 500
+## Compare with empirical data, assuming annual precipitation = 500
 
 ```{r}
 annualSum_modelPar = mean(annualSum) # (mm)
@@ -820,7 +828,7 @@ text(x = nrow(doubleLogCumModelOutput) / 2, y = 0.9 * max(c(summaryByDoy_empiric
      ))
 ```
 
-### 5.6 Compare to input statistics:
+### Compare to input statistics:
 
 ```{r}
 layout(matrix(c(1, 2, 3), nrow = 3), heights = c(10, 10, 2))
@@ -861,4 +869,4 @@ legend(x = 0.25, y = 0.8,
        horiz = T)
 ```
 
-**Partial success**: The double logistic model approach the empirical pattern but tend to generate higher peaks concentrated around the inflection days. The great benefit of this approach is to be able to approximate the desired pattern by setting parameters (ideal for setting up simulation experiments). 
+**Partial success**: The double logistic model approaches the empirical pattern but tend to generate higher peaks concentrated around the inflection days. The great benefit of this approach is to be able to approximate the desired pattern by setting parameters (ideal for setting up simulation experiments). 
